@@ -1,51 +1,54 @@
 # ZoneMTA (internal code name X-699)
 
-Modern outbound SMTP relay (MTA/MSA) built on Node.js, LevelDB (queue handling) and MongoDB (queue storage). It's kind of like Postfix for outbound but is able to use multiple local IP addresses and is easily extendable using plugins that are way more flexible than milters.
+Modern outbound SMTP relay (MTA/MSA) built on Node.js and MongoDB (queue storage). It's kind of like Postfix for outbound but is able to use multiple local IP addresses and is easily extendable using plugins that are way more flexible than milters.
 
-> ZoneMTA is **in beta**, so handle with care! Currently there's a single ZoneMTA instance deployed to production, it delivers about 500 000 messages per day, 70-80 messages per second on peak times. Total messages delivered to date is more than 20 000 000.
+> Currently there's a single ZoneMTA instance deployed to production, it delivers about 500 000 messages per day, processing 70-80 messages per second on peak times. Total messages successfully delivered by that server is more than 100 000 000 (plus 3 000 000 emails that have bounced).
 
 ```
- _____             _____ _____ _____
-|__   |___ ___ ___|     |_   _|  _  |
-|   __| . |   | -_| | | | | | |     |
-|_____|___|_|_|___|_|_|_| |_| |__|__|
+███████╗ ██████╗ ███╗   ██╗███████╗███╗   ███╗████████╗ █████╗
+╚══███╔╝██╔═══██╗████╗  ██║██╔════╝████╗ ████║╚══██╔══╝██╔══██╗
+  ███╔╝ ██║   ██║██╔██╗ ██║█████╗  ██╔████╔██║   ██║   ███████║
+ ███╔╝  ██║   ██║██║╚██╗██║██╔══╝  ██║╚██╔╝██║   ██║   ██╔══██║
+███████╗╚██████╔╝██║ ╚████║███████╗██║ ╚═╝ ██║   ██║   ██║  ██║
+╚══════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝╚═╝     ╚═╝   ╚═╝   ╚═╝  ╚═╝
 ```
 
-The goal of this project is to provide granular control over routing different messages. Trusted senders can be routed through high-speed (more parallel connections) virtual "sending zones" that use high reputation IP addresses, less trusted senders can be routed through slower (less connections) virtual "sending zones" or through IP addresses with less reputation. In addition the server comes packed with features more common to commercial software, ie. message rewriting, IP warm-up or HTTP API for posting messages.
+ZoneMTA provides granular control over routing different messages. Trusted senders can be routed through high-speed (more parallel connections) virtual "sending zones" that use high reputation IP addresses, less trusted senders can be routed through slower (less connections) virtual "sending zones" or through IP addresses with less reputation. In addition the server comes packed with features more common to commercial software, ie. message rewriting, IP warm-up or HTTP API for posting messages.
 
 ZoneMTA is comparable to [Haraka](https://haraka.github.io/) but unlike Haraka it's for outbound only. Both systems run on Node.js and have a built in plugin system even though the designs are somewhat different. The [plugin system](https://github.com/zone-eu/zone-mta/tree/master/plugins) (and a lot more as well) for ZoneMTA is inherited from the [Nodemailer](https://nodemailer.com/) project and thus do not have direct relations to Haraka.
 
 There's also a web-based [administration interface](https://github.com/zone-eu/zmta-webadmin) (needs to be installed separately).
 
-![](https://cldup.com/LpJhOCiQ5E.png)
+## Upgrade notes
 
-![](https://cldup.com/2h6320MiiE.png)
+ZoneMTA version 1.1 uses a different application configuration scheme than 1.0. See [zone-mta-template](https://github.com/zone-eu/zone-mta-template) for reference.
 
-(See all screenshots of ZMTA-WebAdmin [here](https://cloudup.com/c_TLoJ62sdY))
+Also, there is no zone-mta command line application anymore, you need to include it as a module.
+
+## Requirements
+
+1.  **Node.js** v6.0.0+ for running the app
+2.  **MongoDB** for storing messages in the queue
+3.  **Redis** for locking and counters
 
 ## Quickstart
 
-Assuming [Node.js](https://nodejs.org/en/download/package-manager/) (v6.0.0+), MongoDB running on localhost, build tools and git. There must be nothing listening on ports 2525 (SMTP), 8080 (HTTP API) and 8081 (internal data channel). All these ports are configurable.
-
-#### Requirements
-
-1. Requirements: Node.js v6+ for running the app + compiler for building LevelDB bindings
-2. If running in Windows install the (free) build dependencies (Python, Visual Studio Build Tools etc). From elevated PowerShell (run as administrator) run `npm install --global --production windows-build-tools` to get these tools
+Assuming [Node.js](https://nodejs.org/en/download/package-manager/) (v6.0.0+), _MongoDB_ running on localhost and _git_. There must be nothing listening on ports 2525 (SMTP), 12080 (HTTP API) and 12081 (internal data channel). All these ports are configurable.
 
 #### Create ZoneMTA application
 
-If your user is not able to install global modules with npm then run the first command with sudo, otherwise you do not need root permissions to create or run ZoneMTA applications (at least not as long as you don't want to use privileged ports like 25 org 465).
+Fetch the ZoneMTA application template
 
-```bash
-$ npm install -g zone-mta
-$ zone-mta create path/to/app
-$ cd path/to/app
+```
+$ git clone git://github.com/zone-eu/zone-mta-template.git
+$ cd zone-mta-template
+$ npm install --production
 $ npm start
 ```
 
 If everything succeeds then you should have a SMTP relay with no authentication running on localhost port 2525 (does not accept remote connections).
 
-> See [default.js](config/default.js) for all possible config options that you can use for config.json in your app folder.
+Next you could try to install and configure an additional plugin or edit the default configuration in the config folder.
 
 Web administration console should be installed separately, it is not part of the default installation. See instructions in the [ZMTA-WebAdmin page](https://github.com/zone-eu/zmta-webadmin).
 
@@ -53,74 +56,51 @@ Web administration console should be installed separately, it is not part of the
 
 ### Incoming message pipeline
 
-Messages are dropped for delivery either by SMTP or HTTP API. Message is processed as a stream, so it shouldn't matter if the message is very large in size (except if a very large message is submitted using the JSON API). This applies also to DKIM body hash calculation – the hash is calculated chunk by chunk as the message stream flows through (actual signature is generated out of the body hash when delivering the message to destination). The incoming stream starts from incoming connection and ends in LevelDB, so if there's an error in any step between these two, the error is reported back to the client and the message is rejected. If impartial data is stored to LevelDB it gets garbage collected after some time (all message bodies without referencing delivery rows are deleted automatically)
+Messages are dropped for delivery either by SMTP or HTTP API. Message is processed as a stream, so it shouldn't matter if the message is very large in size (except if a very large message is submitted using the JSON API). This applies also to DKIM body hash calculation – the hash is calculated chunk by chunk as the message stream flows through (actual signature is generated out of the body hash when delivering the message to destination). The incoming stream starts from incoming connection and ends in MongoDB GridFS, so if there's an error in any step between these two, the error is reported back to the client and the message is rejected. If impartial data is stored to GridFS it gets garbage collected after some time (all message bodies without referencing delivery rows are deleted automatically)
 
 ![](https://cldup.com/jepwxrWwXc.png)
 
 ### Outgoing message pipeline
 
-Delivering messages to destination
+Delivering messages to destination (this image is outdated, LevelDB is not used anymore)
 
 ![](https://cldup.com/9yEW3oNp3G.png)
 
 ## Features
 
-- Web interface. See queue status and debug deferred messages through an easy to use [web interface](https://github.com/zone-eu/zmta-webadmin) (needs to be installed separately).
-- Cross platform. You do need compile tools but this should be fairly easy to set up on every platform, even on Windows
-- Fast. Send millions of messages per day
-- Send large messages with low overhead
-- Automatic DKIM signing
-- Adds Message-Id and Date headers if missing
-- Sending Zone support: send different messages using different IP addresses
-- Built-in support for delayed messages. Just use a future value in the Date header and the message is not sent out before that time
-- Assign specific recipient domains to specific Sending Zones
-- Queue is stored in LevelDB
-- Built in IPv6 support
-- Uses STARTTLS for outgoing messages by default, so no broken padlock images in Gmail
-- Smarter bounce handling
-- Throttling per Sending Zone connection
-- Spam detection using Rspamd
-- HTTP API to send messages
-- Route messages to the onion network
-- Custom [plugins](https://github.com/zone-eu/zone-mta/tree/master/plugins)
-- Automatic back-off if an IP address gets blacklisted
+*   Web interface. See queue status and debug deferred messages through an easy to use [web interface](https://github.com/zone-eu/zmta-webadmin) (needs to be installed separately).
+*   Cross platform. You can run ZoneMTA even on Windows
+*   Fast. Send millions of messages per day
+*   Send large messages with low overhead
+*   Automatic DKIM signing
+*   Adds _Message-Id_ and _Date_ headers if missing
+*   Sending Zone support: send different messages using different IP addresses
+*   Built-in support for delayed messages. Just use a future value in the Date header and the message is not sent out before that time
+*   Assign specific recipient domains to specific Sending Zones
+*   Queue is stored in MongoDB
+*   Built in IPv6 support
+*   Reports to Prometheus
+*   Uses STARTTLS for outgoing messages by default, so no broken padlock images in Gmail
+*   Smarter bounce handling
+*   Throttling per Sending Zone connection
+*   Spam detection using Rspamd
+*   HTTP API to send messages
+*   Custom [plugins](https://github.com/zone-eu/zone-mta/tree/master/plugins)
+*   Automatic back-off if an IP address gets blacklisted
+*   Email Address Internationalization ([EAI](https://datatracker.ietf.org/wg/eai/about/)) and SMTPUTF8 extension. Send mail to unicode addresses like _андрис@уайлддак.орг_
+*   Delivery to HTTP using POST instead of SMTP
 
 Check the [WIKI](https://github.com/zone-eu/zone-mta/wiki) for more details
 
 ### Configuration
 
-Default configuration can be found from [default.js](config/default.js). In your application specific configuration you override specific options but you do not need to specify these values that you want to keep as default.
-
-For example if the *default.js* states an object with multiple properties like this:
-
-```javascript
-{
-    mailerDaemon: {
-        name: 'Mail Delivery Subsystem',
-        address: 'mailer-daemon@' + os.hostname()
-    }
-}
-```
-
-Then you can override only a single property without changing the other values like this in config.json:
-
-```
-{
-    "mailerDaemon": {
-        "name": "Override default value"
-    }
-}
-```
+Default configuration can be found from [default.js](config/default.js). You can override options in your application specific configuration but you do not need to specify these values that you want to keep as default.
 
 ## Features
 
 ### Large message support
 
 All data is processed in chunks without reading the entire message into memory, so it does not matter if the message is 1kB or 1GB in size.
-
-### LevelDB backend
-
-Using LeveldDB means that you do not run out of inodes when you have a large queue, you can pile up even millions of messages (assuming you do not run out of disk space first). Read about storing queued messages to LeveldDB in the [Wiki](https://github.com/zone-eu/zone-mta/wiki/Queue-handling-in-ZoneMTA). For better performance you can also use alternatives like the Basho fork of LevelDB (see [here](#3-replace-leveldb-with-rocksdb)).
 
 ### DKIM signing
 
@@ -140,7 +120,7 @@ X-Sending-Zone: zone-identifier
 
 For example if you have a Sending Zone called "zone-identifier" set then messages with such header are routed through this Sending Zone.
 
-> **NB** This behavior is enabled by default only for 'api' and 'bounce' zones, see the `allowRountingHeaders` option in default config for details
+> **NB** This behavior is enabled by default only for 'api' and 'bounce' zones, see the `allowRoutingHeaders` option in default config for details
 
 #### Routing based on specific header value
 
@@ -157,7 +137,7 @@ You can define specific header values in the Sending Zone configuration with the
 
 #### Routing based on sender domain name
 
-You also define that all senders with a specific From domain name are routed through a specific domain. Use `senderDomains` option in the Zone config.
+Use `senderDomains` option in the Zone config to define that all senders with a specific From domain name are routed through this Zone.
 
 ```javascript
 'sending-zone': {
@@ -168,7 +148,7 @@ You also define that all senders with a specific From domain name are routed thr
 
 #### Routing based on recipient domain name
 
-You also define that all recipients with a specific domain name are routed through a specific domain. Use `recipientDomains` option in the Zone config.
+Use `recipientDomains` option in the Zone config to define that all recipients with a specific domain name are routed through this Zone.
 
 ```javascript
 'sending-zone': {
@@ -181,20 +161,16 @@ You also define that all recipients with a specific domain name are routed throu
 
 The routing priority is the following:
 
-1. By the `X-Sending-Zone` header
-2. By matching `routingHeaders` headers
-3. By sender domain value in `senderDomains`
-4. By recipient domain value in `recipientDomains`
+1.  By the `X-Sending-Zone` header
+2.  By matching `routingHeaders` headers
+3.  By sender domain value in `senderDomains`
+4.  By recipient domain value in `recipientDomains`
 
 If no routing can be detected, then the "default" zone is used.
 
 ### IPv6 support
 
 IPv6 is supported but not enabled by default. You can enable or disable it per Sending Zone with the `ignoreIPv6` option.
-
-### HTTP based authentication
-
-If authentication is required then all clients are authenticated against a HTTP endpoint using Basic access authentication. If the HTTP request succeeds then the user is considered as authenticated. See more [here](https://github.com/zone-eu/zone-mta/wiki/Authenticating-users). If you need some other authentication mechanisms then you can create a plugin that handles the 'smtp:auth' hook. To enable authentication you need to set `authentication` option to true for that specific SMTP interface.
 
 ### Per-Zone domain connection limits
 
@@ -237,6 +213,22 @@ You can assign a new IP to the IP pool using lower load share than other address
 ```
 
 Once your IP address is warm enough then you can either increase the load ratio for it or remove the parameter entirely to share load evenly between all addresses. Be aware though that every time you change pool structure it mixes up the address resolving, so a message that is currently deferred for greylisting does not get the same IP address that it previously used and thus might get greylisted again.
+
+### Delivery to HTTP
+
+Instead of delivering messages to SMTP you can POST messages to HTTP. In this case you need to set http option for a delivery to true and also set targetUrl property which is the URL the message is POSTed to as a file upload. These changes can be done for example in a plugin.
+
+```javascript
+app.addHook('sender:fetch', (delivery, next) => {
+    delivery.http = true;
+    delivery.targetUrl = 'http://requestb.in/1ed6q7l1';
+    next();
+});
+```
+
+### Multiple instances support
+
+You can start up multiple ZoneMTA servers that share the same MongoDB backend. In this case you have to edit the queue/instanceId configuration option though, every instance needs its own immutable ID. This value is used to lock deferred messages to specific sender instance.
 
 ### HTTP API
 
@@ -306,9 +298,9 @@ The response includes an array of messages
 {
     "list": [
         {
-            "id":"157ca04cd5c000ddea",
-            "zone":"default",
-            "recipient":"example@example.com"
+            "id": "157ca04cd5c000ddea",
+            "zone": "default",
+            "recipient": "example@example.com"
         }
     ]
 }
@@ -340,19 +332,24 @@ The response includes general information about the message and lists all recipi
             "hashAlgo": "sha256",
             "bodyHash": "HAuESLcsVfL2FGQCUtFOwTL6Ax18XDXZO2vOeAz+DpI="
         },
-        "headers": [{
-            "key": "date",
-            "line": "Date: Mon, 03 Oct 2016 12:26:32 +0000"
-        }, {
-            "key": "from",
-            "line": "From: Sender <sender@example.com>"
-        }, {
-            "key": "message-id",
-            "line": "Message-ID: <95dc84ae-ff9e-4e95-aa75-8ee707bc018d@example.com>"
-        }, {
-            "key": "subject",
-            "line": "subject: test"
-        }],
+        "headers": [
+            {
+                "key": "date",
+                "line": "Date: Mon, 03 Oct 2016 12:26:32 +0000"
+            },
+            {
+                "key": "from",
+                "line": "From: Sender <sender@example.com>"
+            },
+            {
+                "key": "message-id",
+                "line": "Message-ID: <95dc84ae-ff9e-4e95-aa75-8ee707bc018d@example.com>"
+            },
+            {
+                "key": "subject",
+                "line": "subject: test"
+            }
+        ],
         "messageId": "<95dc84ae-ff9e-4e95-aa75-8ee707bc018d@example.com>",
         "date": "Mon, 03 Oct 2016 12:26:32 +0000",
         "parsedEnvelope": {
@@ -366,20 +363,22 @@ The response includes general information about the message and lists all recipi
         "bodySize": 3458,
         "created": 1475497593204
     },
-    "messages": [{
-        "id": "1578a823de00009fbb",
-        "seq": "002",
-        "zone": "default",
-        "recipient": "recipient1@example.com",
-        "status": "DEFERRED",
-        "deferred": {
-            "first": 1475499253068,
-            "count": 2,
-            "last": 1475499774161,
-            "next": 1475501274161,
-            "response": "450 4.3.2 Service currently unavailable"
+    "messages": [
+        {
+            "id": "1578a823de00009fbb",
+            "seq": "002",
+            "zone": "default",
+            "recipient": "recipient1@example.com",
+            "status": "DEFERRED",
+            "deferred": {
+                "first": 1475499253068,
+                "count": 2,
+                "last": 1475499774161,
+                "next": 1475501274161,
+                "response": "450 4.3.2 Service currently unavailable"
+            }
         }
-    }]
+    ]
 }
 ```
 
@@ -406,58 +405,138 @@ Hello world! This is a test message
 ...
 ```
 
-#### List all keys
+#### Suppression list
 
-In case you need to see the internals of the database you can list all keys in it
+ZoneMTA allows basic recipient suppression where messages to specific recipient addresses or domains are silently dropped. Suppressed messages do not generate bounce messages.
 
-```bash
-curl http://localhost:8080/internals/list
-```
-
-The response is a plaintext (utf-8) list of keys in the DB. The final line is special, it includes stats about the listing
-
-```
-message 158e3fe97ca000121a #
-message 158e3fe97ca000121a 158e3fe97db000
-message 158e3fe97ca000121a 158e3fe97db001
-message 158e3fe97ca000121a 158e3fe97db002
-message 158e3fe97ca000121a 158e3fe97db003
-...
-message 158e3fe9903000121a 158e3fe9ed7001
-message 158e3fe9903000121a 158e3fe9edf000
-message 158e3fe9903000121a 158e3fe9edf001
-Listed 1044 keys in 0.19s
-```
-
-#### Get value of specific key
-
-You can fetch the value of a key with the following call:
+To see the currently suppressed addresses/domains, make a HTTP call to _/suppressionlist_
 
 ```bash
-curl http://localhost:8080/internals/key?key=KEY_ID
+curl http://localhost:8080/suppressionlist
 ```
 
-The response is an octet stream with the key contents
+The result is an JSON array
 
+```json
+{
+    "suppressed": [
+        {
+            "id": "58da63cc77ebe70b883bec2d",
+            "address": "suppressed@address.com"
+        },
+        {
+            "id": "58da641f77ebe70b883bec2e",
+            "domain": "suppressed-domain.com"
+        }
+    ]
+}
 ```
-<X bytes of binary data>
-```
 
-#### Delete a specific key
+#### Add address or domain to Suppression list
 
-You can also delete a key with the following call:
+You can add suppression entries by address or domain
+
+**Suppress an email address**
 
 ```bash
-curl -XDELETE http://localhost:8080/internals/key?key=KEY_ID
+curl -XPOST http://localhost:8080/suppressionlist -H 'Content-Type: application/json' -d '{
+  "address": "suppressed@address.com"
+}'
 ```
 
-The response is a JSON value with a success message
+With the result
+
+```json
+{
+    "suppressed": {
+        "id": "58da63cc77ebe70b883bec2d",
+        "address": "suppressed@address.com"
+    }
+}
+```
+
+**Suppress a domain**
+
+```bash
+curl -XPOST http://localhost:8080/suppressionlist -H 'Content-Type: application/json' -d '{
+  "domain": "suppressed-domain.com"
+}'
+```
+
+With the result
+
+```json
+{
+    "suppressed": {
+        "id": "58da641f77ebe70b883bec2e",
+        "domain": "suppressed-domain.com"
+    }
+}
+```
+
+#### Delete an entry from Suppression list
+
+You can delete suppression entries by entry ID
+
+```bash
+curl -XDELETE http://localhost:8080/suppressionlist -H 'Content-Type: application/json' -d '{
+  "id": "58da641f77ebe70b883bec2e"
+}'
+```
+
+With the result
+
+```json
+{
+    "deleted": "58da641f77ebe70b883bec2e"
+}
+```
+
+#### Metrics for Prometheus
+
+ZoneMTA automatically collects and exposes metrics for [Prometheus](https://prometheus.io/)
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+In your Prometheus config, the server should be linked like this:
 
 ```
-{"message": "Key deleted"}
+  static_configs:
+    - targets: ['localhost:8080']
 ```
 
-You get the success message even if the key did not actually exist
+![](https://cldup.com/GaUfMKE9zE.png)
+
+The exposed metrics include a lot of different data but the most important ones would be the following:
+
+##### zonemta_delivery_status
+
+`zonemta_delivery_status` exposes counters for delivery statuses. There are 3 different `result` label values
+
+*   `result="delivered"` – count of deliveries accepted by remote MX
+*   `result="rejected"` – count of deliveries that hard bounced
+*   `result="deferred"`– count of deliveries that soft bounced
+
+##### zonemta_message_push
+
+`zonemta_message_push` exposes a counter about stored emails. This counter includes the count of messages accepted for delivery.
+
+##### zonemta_message_drop
+
+`zonemta_message_drop` exposes a counter about emails that were not accepted for delivery (rejected as spam, rejected by plugins, failed to store messages to db etc.)
+
+##### zonemta_queue_size
+
+`zonemta_queue_size` exposes gauges about current size of the queue. There are 2 `type` labels available:
+
+*   `type="queued"` – count of deliveries waiting to be delivered on the first occasion
+*   `type="deferred"` – count of deliveries waiting to be delivered on some later time
+
+##### zonemta_blacklisted
+
+`zonemta_blacklisted` exposes a gauge about currently blacklisted domain:localAddress combos. This value is reset to 0 whenever ZoneMTA master process is restarted. Additionally the blacklist information is cached for 6 hours.
 
 ### Utilities
 
@@ -488,28 +567,9 @@ $ echo "552-5.7.0 This message was blocked because its content presents a potent
 
 Currently it is possible to limit active connections against a domain and you can limit sending speed per connection (eg. 10 messages/min per connection) but you can't limit sending speed per domain. If you have set 3 processes, 5 connections and limit sending with 10 messages / minute then what you actually get is `3 * 5 * 10 = 150` messages per minute for a Sending Zone.
 
-### 2\. Web interface
-
-It should be possible to administer queues using an easy to use web interface.
-
-**Update** There is a web interface that is not open yet as it is still experimental, here's a [preview](https://cloudup.com/cVPSfcwTtrG)
-
-**Update Update** There is now a publicly available web interface, called [ZMTA-WebAdmin](https://github.com/zone-eu/zmta-webadmin)
-
-### 3\. Replace LevelDB with RocksDB
-
-RocksDB has much better performance both for reading and writing but it's more difficult to set up
-
-**Update** You can use any LevelUp [backend module](https://github.com/Level/levelup/wiki/Modules#storage-back-ends). This module is tested with:
-
-  * **leveldown** which is the default
-  * **leveldown-basho-andris** which is a fork of leveldown that uses [Basho fork](https://github.com/basho/leveldb) of LevelDB
-
-To use a different backend than the default leveldown you need to first install it with npm and set the package name as the 'queue'.'backend' config option value.
-
-Personally I prefer the Basho fork. Original LevelDown caused some issues, probably related to compaction, where LevelDB threads were using 100% cpu very often and caused the app to be unresponsive. I have not had these problems with the Basho fork. YMMV
-
 ## Notes
+
+### Memory usage
 
 In production you probably would want to allow Node.js to use more memory, so you should probably start the app with `--max-old-space-size` option
 
@@ -519,51 +579,21 @@ node --max-old-space-size=8192 app.js
 
 This is mostly needed if you want to allow large SMTP envelopes on submission (eg. someone wants to send mail to 10 000 recipients at once) as all recipient data is gathered in memory and copied around before storing to the queue.
 
-## Potential issues with LevelDB
+### DNS
 
-ZoneMTA uses LevelDB as the storage backend. While extremely capable and fast there is a small chance that LevelDB gets into a corrupted state. There are options to recover from such state automatically but this usually means dropping a lot of data, so no automatic attempt is made to "fix" the corrupt database by the application. What you probably want to do in such situation would be to move the queue folder to some other location for manual recovery and let ZoneMTA to start over with a fresh and empty queue folder.
+For speedier DNS resolving there are two options. First (the default) is to cache DNS responses by ZoneMTA in Redis using the [dnscache](https://www.npmjs.com/package/dnscache) module. For better performance it would probably be better to use a dedicated DNS server, mostly because DNS caching is hard and it is better to leave it to software that is built for this.
 
-### Repair failed queue folder
-
-If your queue folder gets corrupted then the actions should be following:
-
-1. Stop ZoneMTA or make sure it does not restart automatically
-2. Move queue folder to somewhere else
-3. Create new empty queue folder and set ZoneMTA user as the owner of that folder
-4. Start ZoneMTA to start accepting and processing new mail
-5. Use ZoneMTA [Recovery tool](https://github.com/zone-eu/zone-mta-recover) to repair the corrupted database and pump messages from it to the fresh ZoneMTA instance or some else SMTP MTA
-
-### Replace LevelDB with basho fork of LevelDB
-
-If you use LevelDB as the backend and start having 100% CPU usage then you might have run into endless compaction. Best bet would be to dump LevelDB and start using the Basho fork of it which is more optimized for servers and does not have such problems.
+[dnsmasq](http://www.thekelleys.org.uk/dnsmasq/docs/dnsmasq-man.html) on localhost has worked great for us. The dns options for ZoneMTA would look like this if you are using local DNS cache like dnsmasq or similar:
 
 ```
-npm install leveldown-basho-andris --save
+"dns": {
+    "caching": false,
+    "nameservers": ["127.0.0.1"]
+}
 ```
-
-And then in your config:
-
-```
-{
-  ...
-  "queue": {
-    "db": "/var/data/zone-mta",
-    "backend": "leveldown-basho-andris",
-    "leveldown-basho-andris": {
-        "createIfMissing": true,
-        "compression": true,
-        "blockSize": 4096,
-        "writeBufferSize": 62914560
-    }
-    ...
-```
-
-You can't reuse your old LevelDB files, so you should start with an empty database folder (which in turn means that you loose your existing queue).
 
 ## License
 
-European Union Public License 1.1 ([details](http://ec.europa.eu/idabc/eupl.html))
-
-In general, EUPLv1.1 is compatible with GPLv2, so it's a _copyleft_ license. Unlike GPL the EUPL license has legally binding translations in every official language of the European Union, including the Estonian language. This is why it was preferred over GPL.
+European Union Public License 1.2 ([details](http://ec.europa.eu/idabc/eupl.html)) or later
 
 ZoneMTA is created and maintained in the European Union, licensed under EUPL and its authors have no relations to the US, thus there can not be any infringements of US-based patents.

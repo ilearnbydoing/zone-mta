@@ -3,10 +3,10 @@
 const RspamdClient = require('./rspamd-client');
 
 module.exports.title = 'Rspamd Spam Check';
-module.exports.init = function (app, done) {
-
+module.exports.init = function(app, done) {
     app.addAnalyzerHook((envelope, source, destination) => {
-        if (!app.config.interfaces.includes(envelope.interface)) {
+        let interfaces = Array.isArray(app.config.interfaces) ? app.config.interfaces : [].concat(app.config.interfaces || []);
+        if (!interfaces.includes(envelope.interface) && !interfaces.includes('*')) {
             return source.pipe(destination);
         }
 
@@ -16,19 +16,20 @@ module.exports.init = function (app, done) {
             to: envelope.to,
             user: envelope.user,
             id: envelope.id,
-            maxSize: app.config.maxSize
+            maxSize: app.config.maxSize,
+            ip: app.config.ip === true ? app.envelope.origin : app.config.ip
         });
 
         rspamdStream.on('fail', err => {
-            app.logger.info('Rspamd', '%s SKIPPED "%s" (from=%s to=%s)', envelope.id, err.message, envelope.from, envelope.to.join(','));
+            app.logger.info('Rspamd', '%s SKIPPED "%s" (from=%s to=%s)', envelope.id, err.message, envelope.from, [].concat(envelope.to || []).join(','));
         });
 
         rspamdStream.on('response', response => {
             // store spam result to the envelope
             envelope.spam = response;
             let score = (Number(response && response.default && response.default.score) || 0).toFixed(2);
-            let tests = [].concat(response && response.tests || []).join(', ');
-            let action = response && response.default && response.default.action || 'unknown';
+            let tests = [].concat((response && response.tests) || []).join(', ');
+            let action = (response && response.default && response.default.action) || 'unknown';
             app.logger.info('Rspamd', '%s RESULTS score=%s action="%s" [%s]', envelope.id, score, action, tests);
 
             app.remotelog(envelope.id, false, 'SPAMCHECK', {
@@ -79,50 +80,43 @@ module.exports.init = function (app, done) {
     });
 
     app.addHook('message:queue', (envelope, messageInfo, next) => {
-        if (!app.config.interfaces.includes(envelope.interface) || !envelope.spam || !envelope.spam.default) {
+        let interfaces = Array.isArray(app.config.interfaces) ? app.config.interfaces : [].concat(app.config.interfaces || []);
+        if ((!interfaces.includes(envelope.interface) && !interfaces.includes('*')) || !envelope.spam || !envelope.spam.default) {
             return next();
         }
 
-        if (app.config.processSpam) {
+        let score = Number(envelope.spam.default.score) || 0;
+        score = Math.round(score * 100) / 100;
 
-            let score = Number(envelope.spam.default.score) || 0;
-            score = Math.round(score * 100) / 100;
+        messageInfo.tests = envelope.spam.tests.join(',');
+        messageInfo.score = score.toFixed(2);
 
-            messageInfo.score = score.toFixed(2);
-
-            if (!app.config.ignoreOrigins.includes(envelope.origin)) {
-                if (app.config.maxAllowedScore && envelope.spam.default.score >= app.config.maxAllowedScore) {
-                    // accept message and silently drop it
-                    return next(app.drop(envelope, 'spam', messageInfo));
-                }
-
-                switch (envelope.spam.default.action) {
-                    case 'reject':
+        if (!app.config.ignoreOrigins.includes(envelope.origin) && !envelope.ignoreSpamScore) {
+            switch (envelope.spam.default.action) {
+                case 'reject':
+                    if (app.config.dropSpam) {
                         // accept message and silently drop it
                         return next(app.drop(envelope, 'spam', messageInfo));
-                    case 'add header':
-                    case 'rewrite subject':
-                    case 'soft reject':
-                        if (app.config.rewriteSubject) {
-                            let subject = envelope.headers.getFirst('subject');
-                            subject = ('[***SPAM(' + score.toFixed(2) + ')***] ' + subject).trim();
-                            envelope.headers.update('Subject', subject);
-                        }
-                        break;
-                }
+                    }
+                    // reject spam
+                    return next(app.reject(envelope, 'spam', messageInfo, '550 This message was classified as SPAM and may not be delivered'));
+                case 'add header':
+                case 'rewrite subject':
+                case 'soft reject':
+                    if (app.config.rewriteSubject) {
+                        let subject = envelope.headers.getFirst('subject');
+                        subject = ('[***SPAM(' + score.toFixed(2) + ')***] ' + subject).trim();
+                        envelope.headers.update('Subject', subject);
+                    }
+                    break;
             }
         }
 
-        if (app.config.rejectSpam && envelope.spam.default.is_spam) {
-            messageInfo.tests = envelope.spam.tests.join(',');
-            return next(app.reject(envelope, 'spam', messageInfo, '550 This message was classified as SPAM and may not be delivered'));
-        }
         next();
     });
 
     app.addHook('sender:headers', (delivery, connection, next) => {
         if (delivery.spam && delivery.spam.default) {
-
             // insert spam headers to the bottom of the header section
             let statusParts = [];
 
@@ -143,8 +137,11 @@ module.exports.init = function (app, done) {
             }
 
             delivery.headers.add('X-Zone-Spam-Resolution', delivery.spam.default.action, Infinity);
-            delivery.headers.add('X-Zone-Spam-Status', (delivery.spam.default.is_spam ? 'Yes' : 'No') + (statusParts.length ? ', ' + statusParts.join(', ') : ''), Infinity);
-
+            delivery.headers.add(
+                'X-Zone-Spam-Status',
+                (delivery.spam.default.is_spam ? 'Yes' : 'No') + (statusParts.length ? ', ' + statusParts.join(', ') : ''),
+                Infinity
+            );
         }
         next();
     });

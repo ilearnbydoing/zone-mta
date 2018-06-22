@@ -5,6 +5,8 @@
 # reasons:
 #   rate, block, spam, message, config, recipient, other, capacity, greylist, network, protocol, auth, blacklist
 
+# This file will be cached after ZoneMTA is started, so in order to reload the rules, send a SIGHUP signal to the master process
+
 # Spamhaus related error messages
 
 # 550 11.22.33.44 blacklisted see http://www.spamhaus.org/query/bl?ip=11.22.33.44
@@ -170,6 +172,16 @@
 # 450 Requested action not taken:c1mx2, IwENCgC3+s5MYEpYXlIcAA--.4588S3, dnsbl.sorbs.net, please try again
 ^450[ \-]+Requested action not taken.*dnsbl,defer,blacklist,Sender IP blacklisted
 
+# Who knows what server this is
+# 553 5.3.0 flph825 DNSBL:ATTRBL 521< 1.2.3.4 >_is_blocked.For assistance forward this email to abuse@example.com
+^553[ \-]+5\.3\.0[ \-]+.*DNSBL:ATTRBL 5\d\d,defer,blacklist,Sender IP blacklisted
+
+# 554-mx.example.com Your access to this mail system has been rejected due to the sending MTA's poor reputation. If you believe that this failure is in error, please contact the intended recipient
+^554[ \-].*Your access to this mail system has been rejected due to the sending MTA's poor reputation,defer,blacklist,Sender IP blacklisted
+
+# 553 5.7.1 <hostname[1.2.3.4]>: Client host rejected: Relaying denied - Your IP identified as spammer. Please contact 123
+^553[ \-]+5\.7\.1\s+.*Your IP identified as spammer\. Please contact,defer,blacklist,Sender IP blacklisted
+
 # Hotmail error messages
 # https://mail.live.com/mail/troubleshooting.aspx
 ^421[ \-]+RP\-00\d,slowdown,rate,Rate limit exceeded
@@ -181,6 +193,11 @@
 ^550[ \-]+SC\-002,defer,blacklist,Sender IP blocked
 ^550[ \-]+SC\-003,reject,block,Sender is open relay
 ^550[ \-]+SC\-004,reject,spam,Sender IP listed as spammer
+
+^550[ \-]5\.4\.1.*Recipient address rejected: Access denied \[.*\.prod\.protection\.outlook\.com\],reject,recipient,Recipient blocked IP
+
+# 550 5.7.606 Access denied, banned sending IP [1.2.3.4]. To request removal from this list please visit https://sender.office.com/ and follow the directions. For more information please go to http://go.microsoft.com/fwlink/?LinkID=526655 (AS16012609) [DB5EUR01FT031.eop-EUR01.prod.protection.outlook.com]
+^550[ \-]5\.7\.606 Access denied, banned sending IP,defer,blacklist,Sender IP blocked
 
 # Yahoo error messages
 # https://help.yahoo.com/kb/SLN23996.html
@@ -194,23 +211,23 @@
 
 # AOL error messages
 # https://postmaster.aol.com/error-codes
-^554[ \-]+\(?RTR:(BB|DU),reject,block,Using dynamic IP range
-^554[ \-]+\(?RTR:CH,reject,virus,Virus found
-^554[ \-]+\(?RTR:RD,reject,config,Invalid reverse DNS
-^554[ \-]+\(?RTR:(SC|BL),defer,blacklist,Sender IP blocked
-^554[ \-]+\(?RTR:GE,defer,other,Technical error
-^554[ \-]+\(?HVU:B\d,reject,message,Message content blocked
-^554[ \-]+\(?RLY:(B1|B2),slowdown,rate,Rate limit exceeded
-^554[ \-]+\(?RLY:(B2|BL),defer,blacklist,Sender IP blocked
-^554[ \-]+\(?RLY:BD,reject,message,Message content blocked
-^(421|554)[ \-]+\(?RLY:(CH),reject,spam,Spam detected
-^554[ \-]+\(?RLY:IR,reject,block,Using dynamic IP range
-^554[ \-]+\(?RLY:SN,reject,sender,Unauthorized sender
-^421[ \-]+\(?DYN:T\d,slowdown,rate,Rate limit exceeded
-^554[ \-]+\(?CON:B1,defer,blacklist,Sender IP blocked
-^421[ \-]+\(?CON:B1,defer,block,Sender IP temporary blocked
-^554[ \-]+\(?DMARC:,reject,dmarc,Message failed DMARC Evaluation
-^421[ \-]+\(?MFF:,defer,message,Future date in message
+^554[ \-]+.*\(?RTR:(BB|DU),reject,block,Using dynamic IP range
+^554[ \-]+.*\(?RTR:CH,reject,virus,Virus found
+^554[ \-]+.*\(?RTR:RD,reject,config,Invalid reverse DNS
+^554[ \-]+.*\(?RTR:(SC|BL),defer,blacklist,Sender IP blocked
+^554[ \-]+.*\(?RTR:GE,defer,other,Technical error
+^554[ \-]+.*\(?HVU:B\d,reject,message,Message content blocked
+^554[ \-]+.*\(?RLY:(B1|B2),slowdown,rate,Rate limit exceeded
+^554[ \-]+.*\(?RLY:(B2|BL),defer,blacklist,Sender IP blocked
+^554[ \-]+.*\(?RLY:BD,reject,message,Message content blocked
+^(421|554)[ \-]+.*\(?RLY:(CH),reject,spam,Spam detected
+^554[ \-]+.*\(?RLY:IR,reject,block,Using dynamic IP range
+^554[ \-]+.*\(?RLY:SN,reject,sender,Unauthorized sender
+^421[ \-]+.*\(?DYN:T\d,slowdown,rate,Rate limit exceeded
+^5\d\d[ \-]+.*\(?CON:B1,defer,blacklist,Sender IP blocked
+^421[ \-]+.*\(?CON:B1,defer,block,Sender IP temporary blocked
+^554[ \-]+.*\(?DMARC:,reject,dmarc,Message failed DMARC Evaluation
+^421[ \-]+.*\(?MFF:,defer,message,Future date in message
 
 # Gmail error messages
 # https://support.google.com/a/answer/3726730?hl=en
@@ -235,7 +252,7 @@
 
 # Hot.ee error messages
 ^550[ \-]+5\.2\.1\s+.*is expired account,reject,recipient,Expired Email account
-^451[ \-]+4\.3\.5\s+Server configuration problem,reject,envelope,User Name In Email Address Not Valid
+^451[ \-]+4\.3\.5\s+Server configuration problem,defer,envelope,User Name In Email Address Not Valid
 ^552[ \-]+5\.2\.2\s+.*Mailbox is full,reject,capacity,Hot.ee Mailbox is full
 
 # Mail.ee error messages
@@ -248,6 +265,19 @@
 ^451[ \-]+4\.7\.1\s+.*service is currently unavailable,defer,capacity,Server currently not available
 
 # Other servers
+
+# 550 Too many invalid recipients
+# Happens when a server starts blocking an IP after too many invalid RCPT TO calls were made
+# Blocking happens on connect, so no way to issue any valid commands to fix this
+# disabled for now, caused more issues than resolved
+^550[ \-]Too many invalid recipients,defer,other,Sender IP blacklisted
+
+# 550 Black listed at hostkarma http://ipadmin.junkemailfilter.com/remove.php?ip=1.2.3.4
+^550[ \-]Black listed at\s,defer,blacklist,Sender IP blacklisted
+
+# 550 The sending IP (1.2.3.4) is listed on https://spamrl.com/. Please resolve this and retry.
+^550[ \-]The sending IP \([\d\.]+\) is listed,defer,blacklist,Sender IP blacklisted
+
 ^4\d\d\b.*Greylist,defer,greylist,Message temporarily Greylisted
 ^4\d\d\b.*try again,defer,greylist,Message temporarily Greylisted
 ^550[ \-]+5.7.1.*\bspam,reject,spam,Message detected as spam

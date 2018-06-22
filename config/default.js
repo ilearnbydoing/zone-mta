@@ -1,52 +1,42 @@
 'use strict';
 
-const os = require('os');
-
 module.exports = {
-
     // If started as root then privileges are dropped after all ports are bound
-    // This user must have read+write rights for the leveldb folder
     //user: 'nobody',
     //group: 'nogroup',
 
     // App name to be used in the Received headers and greeting messages
     name: 'ZoneMTA',
 
-    // App key for process name, syslog ident etc
+    // App key for process name
     ident: 'zone-mta',
 
-    // The user running this server mush have read/write access to the following folders
-    queue: {
-        // Leveldb folder location. Created if it does not exist
-        db: './data/queue',
+    dbs: {
+        // database connection string
+        mongo: 'mongodb://127.0.0.1:27017/zone-mta',
+        redis: {
+            host: '127.0.0.1',
+            port: 6379,
+            db: 3,
+            connectTimeout: 10000
+        },
+        // optional database name if you want to use a different database than the connection string
+        sender: 'zone-mta'
+    },
 
-        // MongoDB connection url
-        mongodb: 'mongodb://127.0.0.1:27017/zone-mta',
+    queue: {
+        // for multi server setup use unique value for every instance
+        // this is needed to route deferred messages to correct instance
+        instanceId: 'default',
 
         // Collection name for GridFS storage
         gfs: 'mail',
 
-        // select the backend to use for storing queue data. this points to a package name
-        // that will be require'd and used by levelup as the storage. For configuration
-        // use an object with the same name as the backend name
-        backend: 'leveldown',
+        // Collection name for the queue
+        collection: 'zone-queue',
 
-        // default config options for basho fork of leveldb
-        'leveldown-basho-andris': {
-            createIfMissing: true,
-            compression: true,
-            blockSize: 4096,
-            writeBufferSize: 60 * 1024 * 1024
-        },
-
-        // default config options for leveldown
-        leveldown: {
-            createIfMissing: true,
-            compression: true,
-            blockSize: 64 * 1024,
-            cacheSize: 128 * 1024 * 1024,
-            writeBufferSize: 64 * 1024 * 1024
-        }
+        // set to true if you do not want old data to be removed
+        disableGC: false
     },
 
     // plugin files to load into ZoneMTA, relative to ./plugins folder
@@ -54,17 +44,23 @@ module.exports = {
     // modules installed from npm
     plugins: {
         'core/example-plugin': false,
+
         // Make sure messages have all required headers like Date or Message-ID
         'core/default-headers': {
-            enabled: ['receiver', 'main', 'sender'],
+            enabled: ['*'],
+
             // which interfaces to allow using routing headers like X-Sending-Zone
-            allowRountingHeaders: ['api', 'bounce'],
+            allowRoutingHeaders: ['api', 'bounce'],
+
             // Add missing headers (Message-ID, Date, etc.)
             addMissing: ['message-id', 'date'],
+
             // If true then delay messages according to the Date header. Messages can be deferred up to 1 year.
             // This only works if the Date header is higher than 5 minutes from now because of possible clock skew
             // This should probably be a separate plugin
             futureDate: false,
+
+            // add X-Originating-IP header
             xOriginatingIP: true
         },
 
@@ -73,14 +69,7 @@ module.exports = {
         // the the user is considered as authenticated
         'core/http-auth': {
             enabled: false, // 'receiver'
-            url: 'http://localhost:8080/test-auth'
-        },
-
-        // Load sender config (eg. DKIM key from a HTTP URL)
-        'core/http-config': {
-            enabled: false, // ['main', 'receiver']
-            // An URL to check sender configuration from
-            url: 'http://localhost:8080/get-config'
+            url: 'http://localhost:12080/test-auth'
         },
 
         // Validate message dropped to the API
@@ -90,20 +79,17 @@ module.exports = {
             maxRecipients: 100
         },
 
-        // Check if recipient MX exists when RCPT TO command is called
-        'core/rcpt-mx': false,
-
         // If enabled then checks message against a Rspamd server
         'core/rspamd': {
             enabled: false, // ['receiver', 'main', 'sender'], // spam is checked in 'receiver' context, headers are added in 'sender' context
-            url: 'http://localhost:11333/check',
-            interfaces: ['feeder'],
-            ignoreOrigins: [],
+            url: 'http://localhost:11333/check', // Rspamd API endpoint
+            interfaces: ['feeder'], // use ['*'] to scan messages from all interfaces
+            ignoreOrigins: [], // a list of source IP addresses to ignore spam results for
             maxSize: 5 * 1024 * 1024, // do not check for spam if the message is very large
-            rejectSpam: false, // if false, then the message is passed on with a spam header, otherwise message is rejected
-            processSpam: false, // if true then drops spam or modifies headers for suspicios messages
-            maxAllowedScore: false, // if Number then drop messages with higher score
-            rewriteSubject: false // if true, adds a [**SPAM**] prefix to mail subject
+            dropSpam: false, // if true then silently drop spam messages instead of rejecting
+            rewriteSubject: false // if true adds a [**SPAM**] prefix to mail subject
+            // ip: true // if true, then includes remote address in Rspamd input as the source IP
+            // ip: '1.2.3.4' // if not true but a string, then includes this value in Rspamd input as the source IP
         },
 
         // Rewrite MAIL FROM address using SRS
@@ -119,13 +105,30 @@ module.exports = {
 
         // Send bounce message to the sender
         'core/email-bounce': {
-            enabled: false, // 'main'
+            enabled: 'main',
             // From: address for the bounce emails
             mailerDaemon: {
                 name: 'Mail Delivery Subsystem',
-                address: 'mailer-daemon@' + os.hostname()
+                // [HOSTNAME] will be replaced with the hostname that was used to send this message
+                address: 'mailer-daemon@[HOSTNAME]'
             },
-            sendingZone: 'bounces'
+            sendingZone: 'bounces',
+            zoneConfig: {
+                // specify zone specific bounce options
+                myzonename: {
+                    // if true then ignore this block, revert to default
+                    disabled: true,
+                    // if not set then default mailerDaemon config is used
+                    mailerDaemon: {
+                        name: 'Mail Delivery Subsystem',
+                        // [HOSTNAME] will be replaced with the hostname that was used to send this message
+                        address: 'mailer-daemon@[HOSTNAME]'
+                    },
+                    // use same queue for handling bounces as for the original message
+                    // if not set then default queue is used
+                    sendingZone: 'myzonename'
+                }
+            }
         },
 
         // POST bounce data to a HTTP URL
@@ -139,26 +142,7 @@ module.exports = {
             //   response=server response message
             //   fbl=the value from X-Fbl header
             // If bounce reporting fails (non 2xx response), the notification is retried a few times during the next minutes
-            url: 'http://localhost:8080/report-bounce'
-        },
-
-        // Send mail addressed to .onion addresses through a SOCKS5 proxy
-        'core/onion': {
-            enabled: false, //'sender', // routing to the onion network is handled in 'sender' context
-            // SOCKS5 proxy host
-            host: '127.0.0.1',
-            // SOCKS5 proxy port
-            port: 9150
-            /*
-                // additional config
-                name: 'foobar.onion', // identifier for the EHLO call
-                mtaPort: 25, // MX port to connect to
-                auth: {
-                    // authentication for the SOCKS proxy (if needed)
-                    username: 'socks user',
-                    password: 'socks pass'
-                }
-             */
+            url: 'http://localhost:12080/report-bounce'
         },
 
         // Calculate and log md5 hashes for all image/* and application/* attachments. Attachment info with the hash
@@ -166,12 +150,24 @@ module.exports = {
         // This adds some CPU load as attachments need to be decoded and md5 hashes,
         // so increase smtpInterfaces.*.processes count to handle the increased load
         // Example: 15872511b0d000c239 ATTACHMENT name="foto-02.jpg" type="image/jpeg" size=1922193 md5=6e0a1c5a2276f7afca68ec7ee4c3200c
-        'core/image-hashes': false // 'receiver'
+        'core/image-hashes': false, // 'receiver',
+
+        // Sign outbound messages with DKIM
+        'core/dkim': {
+            enabled: false, //'sender',
+            // Domain name in the dkim signature. Leave blank to use the domain of From: address
+            domain: 'example.com',
+            // If true then uses the same key to add a signature for the hostname of the outbound IP address
+            signTransportDomain: true,
+            // Selector value in the dkim signature
+            selector: 'test',
+            // Key location
+            path: '/path/to/private/key.pem'
+        }
     },
 
     // You can define multiple listening SMTP interfaces, for example one for port 465, one for 587 etc
     smtpInterfaces: {
-
         // SMTP relay server that accepts messages for the outgoing queue
         feeder: {
             enabled: true,
@@ -211,23 +207,38 @@ module.exports = {
             key: './keys/private.key',
             cert: './keys/server.crt'
             */
+
+            /*
+                // Additionally you can use the options listed in SMTPServer docs:
+                // https://nodemailer.com/extras/smtp-server/#step-3-create-smtpserver-instance
+                hideSTARTTLS: true,
+                hide8BITMIME: true,
+                useXClient: true,
+                ...
+             */
         }
     },
 
     dns: {
-        // cache lookup results
+        // Cache lookup results in Redis. Set to false if using default DNS server
         caching: true,
-        // Sets DNS servers to use for resolving MX/A/AAAA records
-        // Use only IP addresses
+        cahceTTL: 600, // ttl of cached dns keys in seconds (only applies if caching:true)
+
+        // Sets DNS servers to use for resolving MX/A/AAAA records. If not set
+        // then default nameservers are used. IP addresses only!
+        //
         //nameservers: ['127.0.0.1'],
+        //nameservers: ['8.8.8.8', '8.8.8.4'],
+        //nameservers: ['1.1.1.1'],
         nameservers: false,
-        blockLocalAddresses: true,
-        blockDomains: ['localhost', 'localhost.localdomain']
+
+        // If true, then do not allow sending to MX servers in localhost or private IP range
+        blockLocalAddresses: false
     },
 
     // Simple HTTP server for fetching info about messages
     api: {
-        port: 8080,
+        port: 12080,
         // bind to localhost only
         host: '127.0.0.1',
         // domain name to access the API server
@@ -236,7 +247,7 @@ module.exports = {
         // if true, allow posting message data in Nodemailer format to /send
         maildrop: true,
 
-        // hardcoded user credentials for the example authentication URL 'http://localhost:8080/test-auth'
+        // hardcoded user credentials for the example authentication URL 'http://localhost:12080/test-auth'
         user: 'zone', // username for the static example auth url
         pass: 'test' // password for the static example auth url
     },
@@ -245,7 +256,7 @@ module.exports = {
     queueServer: {
         // Set to false to disable any queue processing. Server would accept messages but would not send anything
         enabled: true,
-        port: 8081,
+        port: 12081,
         // bind to localhost only
         host: '127.0.0.1',
         // this is where the clients connect to
@@ -255,13 +266,11 @@ module.exports = {
     log: {
         // silly, verbose, info, error
         level: 'info',
-        // log to syslog if true, otherwise to console
-        syslog: false,
         // set to true to see outgoing SMTP transaction log
         queue: false,
         remote: false
         /*
-        // emit structured log information over UDP
+        // emit structured log information over UDP, this can be used by ZMTA Webadmin
         remote: {
            protocol: 'udp4',
            host: false,
@@ -269,46 +278,42 @@ module.exports = {
         }*/
     },
 
-    /*
-        DKIM keys are provided by sender config response.
-
-        Defualt DKIM private keys are stored in ./keys as {DOMAIN}.{SELECTOR}.pem
-
-        For example if you want to use a key for "kreata.ee" with selector "test" then
-        the private.key should be available from ./keys/kreata.ee.test.pem
-
-        DKIM signature is based on the domain name of the From: address or if there
-        is no From: address then by the domain name of the envelope MAIL FROM:.
-        If a matching key can not be found then the message is not signed
-     */
+    // General DKIM settings
     dkim: {
         // If DKIM signing is turned on then body hash is calculated for every message,
         // even if there is no key available for this sender
         enabled: true,
-        // Set default hash for the DKIM signature, eg. "sha1" or "sha256". This can be
-        // overriden by
-        hashAlgo: 'sha256',
-        // Key folder for the default keys
-        keys: __dirname + '/../keys'
+        // Set default hash for the DKIM signature, eg. "sha1" or "sha256"
+        hashAlgo: 'sha256'
+    },
+
+    uploads: {
+        // if target is an URL then use the following User-Agent identifier
+        userAgent: 'zone-mta'
     },
 
     pools: {
-        main: [{
-            address: '1.2.3.4',
-            name: 'host4'
-        }, {
-            address: '1.2.3.5',
-            name: 'host5'
-        }, {
-            address: '1.2.3.6',
-            name: 'host6'
-        }, {
-            address: '1.2.3.7',
-            name: 'host7',
-            // scale between 0 and 1, this indicates how much of the load this ip should handle
-            // by default all messages are shared equally between different addresses
-            ratio: 1 / 10
-        }]
+        default: [
+            // You can set a list of interfaces here. If there are no IPv4 interfaces defined, then
+            // a default interface of {address:'0.0.0.0', name: os.hostname()} is used
+            /*
+
+            // pool entry can be just an IPv4 or IPv6 address
+            '1.2.3.4', // local address to bind to
+
+            // for more specific settings, use the object form
+            {
+                // Local address to bind to
+                address: '1.2.3.4',
+                // Optional hostname to be used in EHLO/HELO commands, if not set then PTR of address is used
+                name: 'mta.example.com',
+                // Optional ratio value. A scale between 0 and 1, this indicates how much
+                // of the load this ip should handle.
+                // By default all messages are shared equally between different addresses
+                ratio: 1 / 10
+            }
+             */
+        ]
     },
 
     // Sending Zone definitions
@@ -327,22 +332,33 @@ module.exports = {
             ignoreIPv6: true,
 
             // How many child processes to run for this zone
-            processes: 2,
+            processes: 1,
             // How many parallel connections to open for this Sending Zone per process.
             // Local IP addresses from the pool are randomly distributed between
             // the connections.
-            connections: 5,
+            connections: 10,
 
             // Throttling applies per connection in a process
-            throttling: '100 messages/second', // max messages per minute, hour or second
+            // throttling: '100 messages/second', // max messages per minute, hour or second
 
             // Define address:name pairs (both IPv4 and IPv6) for outgoing IP addresses
             // This allows you to use different IP addresses for different messages:
             // For example, if you have 5 IP's listed and you open 5 parallel
             // connections against a domain then each of these seems to originate
             // from a different IP address (assuming you can locally bind to these addresses)
-            pool: []
+            pool: 'default'
+
+            // Use next MTA instead of actual MX
+            /*
+            host: 'smtp.ethereal.email',
+            port: 587,
+            auth: {
+                user: 'jzzluvyzi6hdb5r3@ethereal.email',
+                pass: 'k6XGxbJc5h4Ny7PgtN'
+            }
+            */
         },
+
         // Sending Zone for sending bounce messages
         bounces: {
             preferIPv6: false,
@@ -350,8 +366,8 @@ module.exports = {
             connections: 1,
             processes: 1,
             // zone specific logging
-            logger: true,
-            logLevel: 'silly'
+            //logger: true,
+            //logLevel: 'silly'
 
             // * send through next MTA instead of MX
             // port: 587,
@@ -360,12 +376,12 @@ module.exports = {
             //    user: 'username@gmail.com',
             //    pass: 'ssssss'
             //}
+            pool: 'default'
         }
         /*
         loopback: {
             // Another example for a Sending Zone. You probably do not want to use this
             // unless you want all messages to be blocked
-            name: 'loopback',
             port: 25,
             preferIPv6: false,
             ignoreIPv6: true,
@@ -397,9 +413,9 @@ module.exports = {
     },
 
     blacklist: {
-        // when an IP is blacklisted by spamhaus then disable using this ip for a domain for the next ttl ms
-        // this is in memory only, so if you restart the server the blacklist gets cleared
-        ttl: 6 * 60 * 60 * 1000
+        // when an IP is blacklisted then disable using this ip for a domain for the next ttl ms
+        // this is in memory only, so if you restart or reload the server the blacklist gets cleared
+        ttl: 1 * 60 * 60 * 1000
     },
 
     // Domain specific configuration
@@ -409,7 +425,7 @@ module.exports = {
         default: {
             // How many parallel connections per Sending Zone to use against a recipient domain
             maxConnections: 5,
-            // blacklisted IP addresses that should not be used to send mail
+            // blacklisted IP addresses that should not be used to send mail to this specific server
             disabledAddresses: []
         }
         /*
@@ -426,5 +442,7 @@ module.exports = {
             }
         }
         */
-    }
+    },
+
+    pluginsPath: './plugins'
 };

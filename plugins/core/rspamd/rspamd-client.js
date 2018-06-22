@@ -2,7 +2,7 @@
 
 // streams through a message body and passes it to rspamd for checks
 
-const fetch = require('nodemailer-fetch');
+const fetch = require('nodemailer/lib/fetch');
 const Transform = require('stream').Transform;
 const PassThrough = require('stream').PassThrough;
 
@@ -14,11 +14,23 @@ class RspamdClient extends Transform {
 
         this.bytesWritten = 0;
 
-        let headers = {
-            from: options.from,
-            'deliver-to': options.to,
-            'queue-id': options.id
-        };
+        let headers = {};
+
+        if (options.from) {
+            headers.from = options.from;
+        }
+
+        if (options.to) {
+            headers['deliver-to'] = options.to;
+        }
+
+        if (options.id) {
+            headers['queue-id'] = options.id;
+        }
+
+        if (options.ip) {
+            headers.ip = options.ip;
+        }
 
         if (options.user) {
             headers.user = options.user;
@@ -109,7 +121,7 @@ class RspamdClient extends Transform {
             try {
                 response = JSON.parse(response.toString());
                 let tests = [];
-                Object.keys(response && response.default || {}).forEach(key => {
+                Object.keys((response && response.default) || {}).forEach(key => {
                     if (response.default[key] && response.default[key].name) {
                         tests.push(response.default[key].name + '=' + response.default[key].score);
                     }

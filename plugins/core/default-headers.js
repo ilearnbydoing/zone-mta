@@ -7,13 +7,11 @@ const sendingZone = require('../../lib/sending-zone');
 const hostname = os.hostname();
 
 module.exports.title = 'Default headers';
-module.exports.init = function (app, done) {
-
+module.exports.init = function(app, done) {
     const addMissing = [].concat(app.config.addMissing || []).map(key => (key || '').toString().toLowerCase().trim());
 
     // Endusre default headers like Date, Message-ID etc
     app.addHook('message:headers', (envelope, messageInfo, next) => {
-
         // Fetch sender and receiver addresses
         envelope.parsedEnvelope = {
             from: addressTools.parseAddressList(envelope.headers, 'from').shift() || false,
@@ -26,10 +24,7 @@ module.exports.init = function (app, done) {
 
         if (envelope.envelopeFromHeader) {
             envelope.from = envelope.parsedEnvelope.from || envelope.parsedEnvelope.sender || '';
-            envelope.to = [].
-            concat(envelope.parsedEnvelope.to || []).
-            concat(envelope.parsedEnvelope.cc || []).
-            concat(envelope.parsedEnvelope.bcc || []);
+            envelope.to = [].concat(envelope.parsedEnvelope.to || []).concat(envelope.parsedEnvelope.cc || []).concat(envelope.parsedEnvelope.bcc || []);
         }
 
         // Check Message-ID: value. Add if missing
@@ -47,7 +42,7 @@ module.exports.init = function (app, done) {
         // Check Sending Zone for this message
         //   X-Sending-Zone: loopback
         // If Sending Zone is not set or missing then the default is used
-        if (!envelope.sendingZone && app.config.allowRountingHeaders.includes(envelope.interface)) {
+        if (!envelope.sendingZone && app.config.allowRoutingHeaders.includes(envelope.interface)) {
             let sZone = envelope.headers.getFirst('x-sending-zone').toLowerCase();
             if (sZone) {
                 app.logger.verbose('Queue', 'Detected Zone %s for %s by headers', sZone, mId);

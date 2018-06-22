@@ -2,25 +2,25 @@
 
 // NB! This script is ran as a separate process
 
-const config = require('config');
+const argv = require('minimist')(process.argv.slice(2));
+const config = require('wild-config');
 const log = require('npmlog');
 const crypto = require('crypto');
 
 log.level = config.log.level;
-require('./lib/logger');
 
 // initialize plugin system
-const plugins = require('./lib/plugins');
+const plugins = require('../lib/plugins');
 plugins.init('receiver');
 
-const SMTPInterface = require('./lib/smtp-interface');
+const SMTPInterface = require('../lib/smtp-interface');
 
-const QueueClient = require('./lib/transport/client');
+const QueueClient = require('../lib/transport/client');
 const queueClient = new QueueClient(config.queueServer);
-const RemoteQueue = require('./lib/remote-queue');
+const RemoteQueue = require('../lib/remote-queue');
 
-let currentInterface = (process.argv[2] || '').toString().trim().toLowerCase();
-let clientId = (process.argv[3] || '').toString().trim().toLowerCase() || crypto.randomBytes(10).toString('hex');
+let currentInterface = argv.interfaceName;
+let clientId = argv.interfaceId || crypto.randomBytes(10).toString('hex');
 let smtpServer = false;
 
 let cmdId = 0;
@@ -28,6 +28,10 @@ let responseHandlers = new Map();
 let closing = false;
 
 process.title = config.ident + ': receiver/' + currentInterface;
+
+config.on('reload', () => {
+    log.info('SMTP/' + currentInterface + '/' + process.pid, '[%s] Configuration reloaded', clientId);
+});
 
 let sendCommand = (cmd, callback) => {
     let id = ++cmdId;
@@ -41,7 +45,7 @@ let sendCommand = (cmd, callback) => {
         };
     }
 
-    Object.keys(cmd).forEach(key => data[key] = cmd[key]);
+    Object.keys(cmd).forEach(key => (data[key] = cmd[key]));
     responseHandlers.set(id, callback);
     queueClient.send(data);
 };
@@ -117,13 +121,17 @@ queueClient.connect(err => {
             }
             smtpServer = smtp;
         });
-
     });
 });
 
 // start accepting sockets
 process.on('message', (m, socket) => {
     if (m === 'socket') {
+        if (!socket) {
+            log.verbose('SMTP/' + currentInterface + '/' + process.pid, 'Null Socket');
+            return;
+        }
+
         if (!smtpServer || !smtpServer.server) {
             let tryCount = 0;
             let nextTry = () => {
